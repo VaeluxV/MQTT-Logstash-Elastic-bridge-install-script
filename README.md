@@ -18,7 +18,11 @@ This will put the script in the location you are in a file named `mqtt_logstash_
 
 If the install fails for some reason, try again. If that does not work try rebooting the system and seeing if it works after.
 
-> Tested on a clean install ubuntu server 24.04 LTS with SSH only. I cannot guarantee this will work on other systems. The script installs all dependencies needed.
+> Tested on a clean install ubuntu server 24.04 LTS with SSH only.
+> 
+> I cannot guarantee this will work on other systems.
+>
+> The script installs all dependencies needed.
 
 *The usecase for this script is pretty specific. However it is now here if you need it!*
 
