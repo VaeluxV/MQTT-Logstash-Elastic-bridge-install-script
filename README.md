@@ -20,4 +20,6 @@ If the install fails for some reason, try again. If that does not work try reboo
 
 > Tested on a clean install ubuntu server 24.04 LTS with SSH only. I cannot guarantee this will work on other systems.
 
+*The usecase for this script is pretty specific. However it is now here if you need it!*
+
 ~ Valerie
