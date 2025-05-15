@@ -1,8 +1,7 @@
 #!/bin/bash
 
 # Install script for setting up Mosquitto MQTT broker and Logstash for Elastic Cloud with easy configuration
-# Requires: /
-# Last updated: 2025-05-14
+# Last updated: 2025-05-15
 set -e
 
 # Utility functions
@@ -12,10 +11,15 @@ generate_password() {
 
 ask_password() {
     local user_label=$1
-    local pw
-    echo "Choose password option for $user_label:"
-    select opt in "Generate automatically" "Enter manually"; do
-        case $REPLY in
+    local __resultvar=$2
+    local pw=""
+    while true; do
+        echo ""
+        echo "Choose password option for $user_label:"
+        echo "  1) Generate automatically"
+        echo "  2) Enter manually"
+        read -rp "Selection (1 or 2): " choice
+        case $choice in
             1)
                 pw=$(generate_password)
                 echo "Generated password for $user_label: $pw"
@@ -27,49 +31,68 @@ ask_password() {
                     echo
                     read -rsp "Confirm password: " confirm_pw
                     echo
-                    [[ "$pw" == "$confirm_pw" ]] && break
-                    echo "Passwords do not match. Try again."
+                    pw=$(echo "$pw" | xargs)
+                    confirm_pw=$(echo "$confirm_pw" | xargs)
+                    if [[ -n "$pw" && "$pw" == "$confirm_pw" ]]; then
+                        break
+                    else
+                        echo "Passwords do not match or are empty. Try again."
+                    fi
                 done
                 break
                 ;;
             *)
-                echo "Choose 1 or 2."
+                echo "Invalid selection. Please enter 1 or 2."
                 ;;
         esac
     done
-    echo "$pw"
+
+    eval "$__resultvar=\"\$pw\""
 }
 
 prompt_nonempty() {
     local prompt="$1"
-    local var
+    local __resultvar=$2
+    local var=""
     while true; do
         read -rp "$prompt: " var
-        [[ -n "$var" ]] && echo "$var" && return
-        echo "Input cannot be empty!"
+        var=$(echo "$var" | xargs)  # trim
+        if [[ -n "$var" ]]; then
+            break
+        else
+            echo "Input cannot be empty or whitespace-only!"
+        fi
     done
+    eval "$__resultvar=\"\$var\""
 }
 
 echo "== MQTT to Elastic Installer =="
 
 # User Inputs
-mqtt_pub_user=$(prompt_nonempty "Enter MQTT publishing username (for devices)")
-mqtt_pub_pass=$(ask_password "MQTT device user")
+prompt_nonempty "Enter MQTT publishing username (for devices)" mqtt_pub_user
+ask_password "MQTT device user" mqtt_pub_pass
 
-script_user=$(prompt_nonempty "Enter MQTT logging script username (used by the logger)")
-script_pass=$(ask_password "Logger user (used to read and log to Elastic)")
+prompt_nonempty "Enter MQTT logging script username (used by the logger)" script_user
+ask_password "Logger user (used to read and log to Elastic)" script_pass
 
-elastic_cloud_id=$(prompt_nonempty "Enter your Elastic Cloud ID")
-elastic_api_key=$(prompt_nonempty "Enter your Elastic API Key")
+prompt_nonempty "Enter your Elastic Cloud ID" elastic_cloud_id
+prompt_nonempty "Enter your Elastic API Key" elastic_api_key
 
-read -rp "Use per-sensor Elasticsearch indices? (y/n): " per_sensor_choice
+while true; do
+    read -rp "Use per-sensor Elasticsearch indices? (y/n): " per_sensor_choice
+    [[ "$per_sensor_choice" =~ ^[YyNn]$ ]] && break
+    echo "Please enter 'y' or 'n'."
+done
 
 # Confirm
 echo -e "\n== Confirm Settings =="
-echo "MQTT device username  : $mqtt_pub_user"
-echo "Logger username       : $script_user"
-echo "Elastic Cloud ID      : $elastic_cloud_id"
-echo "Per-sensor indices    : $per_sensor_choice"
+echo "MQTT device username      : $mqtt_pub_user"
+echo "MQTT device password      : $mqtt_pub_pass"
+echo "Logger username           : $script_user"
+echo "Logger password           : $script_pass"
+echo "Elastic Cloud ID          : $elastic_cloud_id"
+echo "Elastic API Key           : $elastic_api_key"
+echo "Per-sensor indices        : $per_sensor_choice"
 read -rp "Continue with setup? (y/n): " confirm
 [[ "$confirm" != "y" ]] && exit 0
 
@@ -77,7 +100,8 @@ echo "== Installing Mosquitto MQTT =="
 apt update
 apt install -y mosquitto mosquitto-clients
 
-# Setup Mosquitto config
+echo "include_dir /etc/mosquitto/conf.d" > /etc/mosquitto/mosquitto.conf
+
 mkdir -p /etc/mosquitto/conf.d
 tee /etc/mosquitto/conf.d/auth.conf > /dev/null <<EOF
 allow_anonymous false
@@ -85,13 +109,12 @@ password_file /etc/mosquitto/passwd
 listener 1883
 EOF
 
-# Create MQTT users
 touch /etc/mosquitto/passwd
-chmod 640 /etc/mosquitto/passwd
 mosquitto_passwd -b /etc/mosquitto/passwd "$mqtt_pub_user" "$mqtt_pub_pass"
 mosquitto_passwd -b /etc/mosquitto/passwd "$script_user" "$script_pass"
+chown root:mosquitto /etc/mosquitto/passwd
+chmod 640 /etc/mosquitto/passwd
 
-# Logging
 mkdir -p /var/log/mosquitto
 touch /var/log/mosquitto/mosquitto.log
 chown mosquitto: /var/log/mosquitto/mosquitto.log
@@ -113,7 +136,6 @@ python3.13 -m venv venv
 source venv/bin/activate
 pip install paho-mqtt
 
-# Logger script
 cat > mqtt_logger.py <<EOF
 import paho.mqtt.client as mqtt
 import datetime
@@ -148,7 +170,6 @@ touch /var/log/mqtt_subscriber.log
 chmod 644 /var/log/mqtt_subscriber.log
 chown root:root /var/log/mqtt_subscriber.log
 
-# Systemd service
 cat > /etc/systemd/system/mqtt_logger.service <<EOF
 [Unit]
 Description=MQTT Logging Script
@@ -180,7 +201,6 @@ apt install -y logstash
 mkdir -p /var/lib/logstash/plugins/inputs/file/
 chown -R logstash:logstash /var/lib/logstash/plugins/
 
-# Configure Logstash
 logstash_config="/etc/logstash/conf.d/mqtt.conf"
 filter_block=""
 index_rule="mqtt-logs-%{+YYYY.MM.dd}"
@@ -245,7 +265,12 @@ systemctl enable logstash
 systemctl restart logstash
 
 echo
-echo "All done!"
+echo "Done!"
 echo "You might have to reboot the system for all changes to take effect correctly."
+echo
 echo "You can publish MQTT messages to localhost:1883 using the '$mqtt_pub_user' user."
 echo "The script user '$script_user' will log all messages to Elastic using your cloud config."
+echo "If something got misconfigured, run this script again. It will overwrite the configs with the new ones."
+echo
+echo "Check https://github.com/VaeluxV/MQTT-User-creation-script for managing MQTT users with ease."
+echo
